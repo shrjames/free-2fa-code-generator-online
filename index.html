@@ -1,0 +1,363 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Free 2FA Code Generator Online | Bypass Authenticator App | Web TOTP Tool</title>
+<meta name="description" content="A secure, client-side online 2FA TOTP token generator. Generate two-factor authentication codes instantly from your secret keys without an app." />
+<meta name="robots" content="index, follow" />
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://cdn.jsdelivr.net/npm/otpauth@9.3.2/dist/otpauth.umd.min.js"></script>
+<style>
+  body {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+    background: #0a0a0a;
+  }
+  .glow-border {
+    box-shadow: 0 0 0 1px rgba(34, 197, 94, 0.15), 0 0 24px -8px rgba(34, 197, 94, 0.25);
+  }
+  .code-display {
+    font-variant-numeric: tabular-nums;
+    letter-spacing: 0.35em;
+    text-shadow: 0 0 12px rgba(34, 197, 94, 0.45);
+  }
+  .progress-track {
+    background: rgba(34, 197, 94, 0.1);
+  }
+  .progress-bar {
+    background: linear-gradient(90deg, #22c55e, #4ade80);
+    transition: width 0.95s linear, background 0.3s ease;
+  }
+  .progress-bar.warn {
+    background: linear-gradient(90deg, #f59e0b, #fbbf24);
+  }
+  .progress-bar.danger {
+    background: linear-gradient(90deg, #ef4444, #f87171);
+  }
+  .terminal-prompt::before {
+    content: "$ ";
+    color: #22c55e;
+  }
+  input::placeholder { color: #4b5563; }
+  .copy-flash {
+    animation: flash 0.6s ease;
+  }
+  @keyframes flash {
+    0%   { background-color: rgba(34, 197, 94, 0.4); }
+    100% { background-color: rgba(34, 197, 94, 0); }
+  }
+  .blink { animation: blink 1s steps(2, start) infinite; }
+  @keyframes blink { to { visibility: hidden; } }
+</style>
+
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "FAQPage",
+  "mainEntity": [
+    {
+      "@type": "Question",
+      "name": "What exactly is a TOTP Secret Key, and how is it different from a password?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "A TOTP Secret Key is a cryptographically random value (typically 160 bits, encoded in Base32) that is shared once between the authentication server and the user's authenticator app during enrollment. Unlike a password, it is never transmitted during the login process. Instead, both sides use it independently as input to the HMAC-SHA1 algorithm, combined with the current time, to derive the same 6-digit code. Because the secret stays local on both ends after the initial provisioning, even an attacker who intercepts every login attempt cannot recover the secret from the codes alone."
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "My authenticator code keeps being rejected even though I'm typing it correctly. How do I troubleshoot clock-drift issues?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "Clock drift is the most common cause of valid-looking codes being rejected. TOTP requires the client and server clocks to be synchronized within the server's tolerance window, typically plus or minus one 30-second step. To diagnose: first, check that your device is using automatic network time (NTP). On mobile devices, disable manual time settings. On servers, verify that chronyd or ntpd is running and synchronized. If the issue persists, most enterprise 2FA platforms offer a resynchronization workflow that asks the user to submit two consecutive codes, allowing the server to recalculate the offset and store it for that account."
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "What happens if a user loses their device with the authenticator app installed?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "Loss of an enrolled device should be treated as a credential compromise event. The standard recovery flow is for the user to authenticate through a pre-established backup channel, typically one-time recovery codes generated at enrollment, a secondary verified email or phone, or a manual identity verification process with the help desk. Once verified, the administrator should revoke the existing TOTP enrollment, which invalidates the old secret on the server side, and then guide the user through a fresh enrollment that generates a new Secret Key. Backup recovery codes should be stored in a password manager or printed and kept in a secure physical location."
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "Can the same TOTP Secret Key be enrolled on multiple devices, and is this a security risk?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "Technically, yes—because TOTP requires no per-device state beyond the shared secret, scanning the same enrollment QR code on multiple authenticator apps will produce identical codes on each. Whether this is acceptable depends on policy. For individual user accounts, enrolling on two devices (such as a primary phone and a backup tablet) provides convenient recovery without weakening the cryptography. However, sharing a secret across multiple human users undermines the audit trail and violates the principle that a second factor should prove possession by a specific individual. Enterprise policies typically prohibit multi-user sharing while allowing single-user multi-device enrollment."
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "Why does my organization recommend WebAuthn or hardware security keys over TOTP for high-privilege accounts?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "TOTP protects against credential stuffing and password reuse, but it does not protect against real-time phishing. An attacker operating a convincing fake login page can capture both the password and the 6-digit code, then immediately replay them on the real site before the 30-second window expires. WebAuthn and FIDO2 hardware keys defeat this attack because they cryptographically bind the authentication to the legitimate site's origin—the key will simply refuse to sign a challenge from a phishing domain. For administrators, financial roles, and other high-risk accounts, this phishing resistance is a meaningful security upgrade. TOTP remains appropriate for general user populations as a significant improvement over password-only authentication."
+      }
+    }
+  ]
+}
+</script>
+</head>
+<body class="min-h-screen text-gray-200 flex flex-col items-center justify-start p-4 sm:p-8">
+
+<main class="w-full max-w-xl">
+
+  <header class="mb-6">
+    <div class="text-xs text-gray-500 mb-1">~/tools/totp</div>
+    <h1 class="text-xl sm:text-2xl text-green-400 terminal-prompt">totp-generator<span class="blink text-green-400">_</span></h1>
+    <p class="text-sm text-gray-500 mt-2">RFC 6238 · SHA-1 · 30s period · 6 digits</p>
+  </header>
+
+  <section class="bg-gray-950 border border-gray-800 rounded-md p-5 mb-4">
+    <label for="secret" class="block text-xs uppercase tracking-widest text-gray-500 mb-2">
+      Secret Key (Base32)
+    </label>
+    <input
+      id="secret"
+      type="text"
+      autocomplete="off"
+      spellcheck="false"
+      placeholder="JBSWY3DPEHPK3PXP"
+      class="w-full bg-black border border-gray-800 rounded px-3 py-2.5 text-sm text-green-300 focus:outline-none focus:border-green-500 focus:ring-1 focus:ring-green-500/30 transition"
+    />
+    <div id="status" class="mt-2 text-xs text-gray-500 min-h-[1rem]">Awaiting input…</div>
+  </section>
+
+  <section id="output-panel" class="bg-gray-950 border border-gray-800 rounded-md p-6 mb-4 glow-border">
+    <div class="flex items-baseline justify-between mb-4">
+      <span class="text-xs uppercase tracking-widest text-gray-500">Current code</span>
+      <span id="period-label" class="text-xs text-gray-600">--s</span>
+    </div>
+
+    <div class="flex items-center justify-center my-2">
+      <div id="code" class="code-display text-4xl sm:text-5xl font-bold text-green-400 select-all">------</div>
+    </div>
+
+    <div class="mt-5">
+      <div class="progress-track h-1.5 rounded-full overflow-hidden">
+        <div id="progress" class="progress-bar h-full rounded-full" style="width: 100%"></div>
+      </div>
+    </div>
+
+    <div class="mt-5 flex gap-2">
+      <button
+        id="copy-btn"
+        class="flex-1 bg-gray-900 hover:bg-gray-800 border border-gray-700 hover:border-green-500/60 text-sm text-gray-200 py-2.5 rounded transition disabled:opacity-40 disabled:cursor-not-allowed"
+        disabled
+      >
+        <span id="copy-label">Copy code</span>
+      </button>
+      <button
+        id="clear-btn"
+        class="px-4 bg-gray-900 hover:bg-gray-800 border border-gray-700 hover:border-red-500/60 text-sm text-gray-400 hover:text-red-400 py-2.5 rounded transition"
+        title="Clear secret"
+      >
+        Clear
+      </button>
+    </div>
+
+    <div class="mt-6 text-center w-full">
+        <a href="https://maizhanghao.top" target="_blank" rel="noopener noreferrer" 
+           class="inline-block w-full py-3.5 px-4 bg-red-600 hover:bg-red-700 text-white font-bold text-sm sm:text-base rounded shadow-[0_0_20px_rgba(220,38,38,0.6)] animate-pulse transition-all duration-300 border border-red-500">
+            🔥十年号商：高纯度纯手工免验证独享老号现货，点击进入
+        </a>
+    </div>
+  </section>
+
+  <footer class="text-xs text-gray-600 leading-relaxed mb-12">
+    <p>Runs entirely in your browser. Secret never leaves this page.</p>
+    <p class="mt-1">Library: <code class="text-gray-500">otpauth</code> · No telemetry · No storage.</p>
+  </footer>
+
+  <hr class="border-gray-800 my-8" />
+  
+  <article class="text-gray-400 text-sm space-y-6 leading-relaxed bg-gray-950 p-6 border border-gray-900 rounded-md">
+    <h2 class="text-lg font-bold text-gray-200">The Mechanics of Time-Based One-Time Passwords (TOTP)</h2>
+    <p>Time-Based One-Time Password (TOTP) is a standardized algorithm defined in RFC 6238. It provides a symmetric key mechanism for generating short-lived passwords, typically used as a second factor in multi-factor authentication (MFA) architectures.</p>
+    
+    <h3 class="text-base font-semibold text-gray-300">The Cryptographic Foundation</h3>
+    <p>TOTP is built on top of HOTP (HMAC-based One-Time Password, RFC 4226), with the key distinction being that the counter is derived from the current unix time rather than an incremental event counter.</p>
+    <ol class="list-decimal pl-5 space-y-2 text-gray-500">
+      <li><strong class="text-gray-400">Shared Secret Provisioning:</strong> During enrollment, the server generates a cryptographically secure random key.</li>
+      <li><strong class="text-gray-400">Time Step Calculation:</strong> Both client and server compute <code>T = (Current Unix Time - T0) / X</code>, where X is the time step window (standardized as 30 seconds).</li>
+      <li><strong class="text-gray-400">HMAC Computation:</strong> The system calculates an HMAC-SHA1 hash using the Secret Key and the time counter <code>T</code>.</li>
+      <li><strong class="text-gray-400">Dynamic Truncation:</strong> The last nibble of the HMAC output determines the offset to extract a 4-byte dynamic binary code.</li>
+      <li><strong class="text-gray-400">Modulo Reduction:</strong> The integer is reduced modulo 10^d (where d is 6 or 8 digits) to produce the human-readable authentication code.</li>
+    </ol>
+    <p>Because both sides derive the code from the same secret and synchronized clocks, authentication can occur securely without broadcasting sensitive keys over network layers.</p>
+
+    <h2 class="text-lg font-bold text-gray-200 mt-8">Why Programmatic 2FA Tools Outperform Physical Devices in Automated Testing</h2>
+    <p>In enterprise QA pipelines, integration testing, and continuous deployment workflows, relying on hardware keys or mobile phones creates immense architectural bottlenecks.</p>
+    <h3 class="text-base font-semibold text-gray-300">Deterministic, Reproducible Test Runs</h3>
+    <p>Using programmatic CLI or web-based token utilities enables DevOps engineers to automatically sync environments via environment variables, eliminating manual interaction while hardening security policies across virtual environments.</p>
+  </article>
+
+  <section class="mt-8 mb-12 bg-gray-950 p-6 border border-gray-900 rounded-md space-y-6">
+    <h2 class="text-base font-bold text-green-500 tracking-wider uppercase">Frequently Asked Technical Questions</h2>
+    
+    <div class="border-b border-gray-900 pb-4">
+      <h4 class="text-gray-200 font-semibold mb-2">Q1: What exactly is a TOTP Secret Key, and how is it different from a password?</h4>
+      <p class="text-xs text-gray-500">A1: A TOTP Secret Key is a shared cryptographic value encoded in Base32. It remains localized on both sides after initial setup, meaning it never flies across the network during verification pipelines, blocking traditional credential harvesting vectors.</p>
+    </div>
+
+    <div class="border-b border-gray-900 pb-4">
+      <h4 class="text-gray-200 font-semibold mb-2">Q2: My authenticator code keeps being rejected even though I'm typing it correctly. How do I troubleshoot clock-drift issues?</h4>
+      <p class="text-xs text-gray-500">A2: TOTP relies tightly on atomic synchronization. Clock drift beyond standard 30s step triggers failure modes. Enforcing network time synchronization protocols (NTP) on infrastructure elements resolves this issue.</p>
+    </div>
+
+    <div class="border-b border-gray-900 pb-4">
+      <h4 class="text-gray-200 font-semibold mb-2">Q3: What happens if a user loses their device with the authenticator app installed?</h4>
+      <p class="text-xs text-gray-500">A3: Lost endpoints require instant lifecycle expiration. The admin layer must revoke the specific secret seed immediately and switch authentication routes to pre-allocated recovery tokens before re-provisioning.</p>
+    </div>
+  </section>
+
+</main>
+
+<script>
+(function () {
+  const secretInput = document.getElementById('secret');
+  const codeEl      = document.getElementById('code');
+  const progressEl  = document.getElementById('progress');
+  const periodLabel = document.getElementById('period-label');
+  const statusEl    = document.getElementById('status');
+  const copyBtn     = document.getElementById('copy-btn');
+  const copyLabel   = document.getElementById('copy-label');
+  const clearBtn    = document.getElementById('clear-btn');
+  const outputPanel = document.getElementById('output-panel');
+
+  const PERIOD = 30;
+  const DIGITS = 6;
+  let totp = null;
+  let lastCode = '';
+
+  function normalizeSecret(raw) {
+    return raw.replace(/[\s-]/g, '').toUpperCase();
+  }
+
+  function isValidBase32(s) {
+    return /^[A-Z2-7]+=*$/.test(s) && s.length >= 8;
+  }
+
+  function setStatus(text, kind = 'idle') {
+    const colors = {
+      idle:  'text-gray-500',
+      ok:    'text-green-500',
+      warn:  'text-yellow-500',
+      err:   'text-red-400',
+    };
+    statusEl.className = 'mt-2 text-xs min-h-[1rem] ' + (colors[kind] || colors.idle);
+    statusEl.textContent = text;
+  }
+
+  function resetOutput() {
+    totp = null;
+    lastCode = '';
+    codeEl.textContent = '------';
+    progressEl.style.width = '100%';
+    progressEl.classList.remove('warn', 'danger');
+    periodLabel.textContent = '--s';
+    copyBtn.disabled = true;
+    copyLabel.textContent = 'Copy code';
+  }
+
+  function buildTotp(secret) {
+    try {
+      const t = new OTPAuth.TOTP({
+        algorithm: 'SHA1',
+        digits: DIGITS,
+        period: PERIOD,
+        secret: OTPAuth.Secret.fromBase32(secret),
+      });
+      t.generate();
+      return t;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  function onSecretChange() {
+    const raw = secretInput.value;
+    if (!raw.trim()) {
+      resetOutput();
+      setStatus('Awaiting input…', 'idle');
+      return;
+    }
+    const normalized = normalizeSecret(raw);
+    if (!isValidBase32(normalized)) {
+      resetOutput();
+      setStatus('Invalid Base32 (allowed: A–Z, 2–7, min 8 chars)', 'err');
+      return;
+    }
+    const t = buildTotp(normalized);
+    if (!t) {
+      resetOutput();
+      setStatus('Could not parse secret.', 'err');
+      return;
+    }
+    totp = t;
+    setStatus('Secret loaded · generating live code', 'ok');
+    tick();
+  }
+
+  function tick() {
+    if (!totp) return;
+    const now = Date.now();
+    const secondsIntoPeriod = Math.floor(now / 1000) % PERIOD;
+    const remaining = PERIOD - secondsIntoPeriod;
+
+    const code = totp.generate({ timestamp: now });
+    if (code !== lastCode) {
+      lastCode = code;
+      codeEl.textContent = code.slice(0, 3) + ' ' + code.slice(3);
+      copyBtn.disabled = false;
+    }
+
+    const pct = (remaining / PERIOD) * 100;
+    progressEl.style.width = pct + '%';
+    progressEl.classList.toggle('warn', remaining <= 10 && remaining > 5);
+    progressEl.classList.toggle('danger', remaining <= 5);
+    periodLabel.textContent = remaining + 's';
+  }
+
+  async function copyCode() {
+    if (!lastCode) return;
+    try {
+      await navigator.clipboard.writeText(lastCode);
+    } catch {
+      const ta = document.createElement('textarea');
+      ta.value = lastCode;
+      ta.style.position = 'fixed';
+      ta.style.opacity = '0';
+      document.body.appendChild(ta);
+      ta.select();
+      try { document.execCommand('copy'); } catch {}
+      document.body.removeChild(ta);
+    }
+    copyLabel.textContent = '✓ Copied';
+    outputPanel.classList.add('copy-flash');
+    setTimeout(() => {
+      copyLabel.textContent = 'Copy code';
+      outputPanel.classList.remove('copy-flash');
+    }, 1200);
+  }
+
+  function clearAll() {
+    secretInput.value = '';
+    resetOutput();
+    setStatus('Cleared.', 'idle');
+    secretInput.focus();
+  }
+
+  secretInput.addEventListener('input', onSecretChange);
+  copyBtn.addEventListener('click', copyCode);
+  clearBtn.addEventListener('click', clearAll);
+
+  setInterval(tick, 1000);
+
+  resetOutput();
+  secretInput.focus();
+})();
+</script>
+</body>
+</html>
